@@ -409,6 +409,231 @@ Environment variables:
 
 ---
 
+## Tutorial: Blockchain for Complete Beginners
+
+This section explains KermaChain in plain English — no computer science degree required.
+
+### What Is a Blockchain, Really?
+
+Imagine a **shared Google Sheet** that everyone can see, but **nobody can edit past rows**. Every few minutes, a new row gets added with recent transactions. Once added, it's permanent.
+
+That's a blockchain:
+- **Blocks** = rows in the spreadsheet
+- **Chain** = each row references the previous one (so you can't change history)
+- **Nodes** = computers running this software, all keeping identical copies
+
+### What Is KermaChain?
+
+KermaChain is a **teaching blockchain** — a simplified but real implementation of a cryptocurrency network. It demonstrates all the core concepts:
+- Peer-to-peer networking (nodes talk directly, no central server)
+- Digital signatures (Ed25519 — same math used by Signal, SSH, Solana)
+- Proof-of-Work mining (find a rare hash, like a lottery)
+- UTXO model (track unspent coins, not account balances)
+- Chain reorganizations (when two miners find blocks simultaneously)
+
+It's built for **learning**, not production use.
+
+---
+
+### The Three Pieces You'll Run
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. CORE NODE (Python)           │  2. API SERVER (Python)  │
+│  kerma/main.py                   │  backend/kerma/main.py   │
+│  - Connects to other nodes       │  - REST API on :3001     │
+│  - Validates blocks/transactions │  - WebSocket for live UI │
+│  - Stores data in SQLite         │  - Reads from SQLite     │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────────┐
+                    │ 3. DASHBOARD (JS)   │
+                    │ frontend/           │
+                    │ - Next.js on :3000  │
+                    │ - Calls API + WS    │
+                    └─────────────────────┘
+```
+
+You can run just the **core node** (headless, for testing), or all three for the full visual experience.
+
+---
+
+### Step-by-Step: Run Everything Locally
+
+#### Prerequisites
+- **Python 3.11+** — `python --version`
+- **Node.js 18+** — `node --version`
+- **Git** — `git --version`
+
+#### 1. Clone & Install
+```bash
+git clone https://github.com/abbysweb/KermaChain.git
+cd KermaChain
+```
+
+#### 2. Run the Core Node (Terminal 1)
+```bash
+# Install Python deps
+pip install -r requirements.txt
+# cryptography, that's it — we use stdlib for everything else
+
+# Start the P2P node on port 18018
+python -m kerma.main
+```
+You'll see:
+```
+Starting KermaChain node...
+  P2P: 0.0.0.0:18018
+  API: 0.0.0.0:3001
+Blockchain initialized at height 0, tip 00002fa1...
+Listening on 0.0.0.0:18018
+```
+
+#### 3. Run the API Server (Terminal 2)
+```bash
+cd backend
+pip install -r requirements.txt
+# aiohttp, cryptography
+
+python -m kerma.main
+```
+This starts the REST API on `http://localhost:3001` and WebSocket on `ws://localhost:3001/ws/live`.
+
+#### 4. Run the Dashboard (Terminal 3)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open **http://localhost:3000** — you'll see the live dashboard.
+
+---
+
+### What You'll See on the Dashboard
+
+| Section | What It Shows |
+|---------|---------------|
+| **Stat Cards** | Chain height, connected peers, mempool size, uptime |
+| **Height Chart** | Visual timeline of blocks |
+| **Recent Blocks** | Each block: height, miner, tx count, timestamp |
+| **Mempool** | Pending transactions waiting to be mined |
+| **Peers** | Known nodes, green = connected |
+| **Explainer** | Click to expand — animated step diagram |
+
+The dashboard **polls the API every 5 seconds** and listens on WebSocket for instant updates when a new block or transaction arrives.
+
+---
+
+### Key Concepts Explained
+
+#### 1. UTXO (Unspent Transaction Output) — "Digital Cash"
+Unlike a bank (account model: "Alice has $100"), Bitcoin/KermaChain uses **UTXO**:
+- You don't have a balance. You have **discrete coins**.
+- Transaction: "I spend coin #A123 and #B456, create new coins #C789 (to Bob) and #D012 (change to me)"
+- Prevents double-spending: each coin can only be spent once
+
+#### 2. Ed25519 Signatures — "Unforgeable ID"
+Every transaction input must be signed by the private key matching the output's public key. The math (elliptic curve) makes it **impossible to forge** without the private key.
+
+#### 3. Proof-of-Work — "The Lottery"
+To add a block, you must find a **nonce** (random number) such that:
+```
+hash(block_data + nonce) < TARGET
+```
+The target is a very small number (starts with many zeros). This takes millions of tries — **work** that proves you spent compute power.
+
+#### 4. Chain Reorganization — "The Fork"
+Two miners find valid blocks at the same height. Network splits temporarily. When the next block arrives, **longest chain wins**. The losing block's transactions go back to the mempool.
+
+#### 5. Mempool — "Waiting Room"
+Valid transactions sit here until a miner includes them in a block. On reorg, they're re-validated against the new chain tip.
+
+---
+
+### Project Structure — What's Where?
+
+```
+KermaChain/
+├── kerma/                    # CORE NODE (run this for headless)
+│   ├── main.py              # Entry point, connection handling
+│   ├── constants.py         # Genesis block, ports, targets
+│   ├── objects.py           # Block/TX validation, UTXO, signatures
+│   ├── mempool.py           # Transaction pool + reorg rebasing
+│   ├── validator.py         # Pending object tracker (timeouts)
+│   ├── network/
+│   │   ├── protocol.py      # Message building/parsing
+│   │   ├── peer.py          # Peer address class
+│   │   ├── peers.py         # Peer persistence (peers.json)
+│   │   └── exceptions.py    # Faulty vs non-faulty errors
+│   └── storage/
+│       ├── db.py            # SQLite schema + genesis init
+│       └── jcs.py           # JSON Canonicalization (RFC 8785)
+│
+├── backend/                  # API SERVER
+│   └── kerma/
+│       ├── main.py          # aiohttp server entry
+│       ├── config.py        # Dataclass config
+│       ├── api/server.py    # REST + WebSocket routes
+│       ├── core/            # Block, TX, Blockchain, Mempool, UTXO
+│       ├── network/         # Async node, peer manager
+│       ├── storage/         # Database wrapper
+│       └── crypto/          # Hashing, JCS, Ed25519 verify
+│
+├── frontend/                 # DASHBOARD (Next.js 14 + TS)
+│   ├── app/page.tsx         # Main dashboard
+│   ├── components/          # StatCard, BlockCard, HeightChart, etc.
+│   └── lib/                 # API client, WebSocket hook, types
+│
+├── tests/                    # Integration tests (pytest)
+│   ├── test_full.py         # Handshake, getchaintip, peers, mempool
+│   └── test_transactions.py # Block validation: PoW, timestamps, genesis
+│
+└── README.md                # You are here
+```
+
+---
+
+### Running the Tests
+
+Requires the **core node running on port 18018** (Terminal 1 above):
+
+```bash
+python -m pytest tests/ -v
+```
+
+Tests cover:
+- Handshake + basic RPC (getchaintip, getpeers, getmempool)
+- Block validation: invalid PoW, future timestamp, fake genesis, missing parent
+
+---
+
+### Common Issues
+
+| Problem | Fix |
+|---------|-----|
+| `Address already in use` | Kill old process: `taskkill /PID <pid> /F` (Windows) or `lsof -ti:18018 \| xargs kill` (Mac/Linux) |
+| Frontend shows mock data | Ensure API server (Terminal 2) is running on :3001 |
+| `ModuleNotFoundError: kerma` | Run from project root, or `pip install -e .` |
+| WebSocket fails in browser | Check CORS — API allows all origins by default |
+
+---
+
+### Next Steps for Learning
+
+1. **Read the code** — Start with `kerma/objects.py` (validation logic)
+2. **Add a feature** — Try implementing a simple mining endpoint
+3. **Break things** — Send malformed blocks via the tests, see how validation catches them
+4. **Scale up** — Run multiple nodes on different ports, watch them sync
+
+---
+
+### Why "KermaChain"?
+
+**Kerma** = "Kernel" + "Karma" — the core engine of actions and consequences in a blockchain.
+
+---
+
 ## License
 
 MIT License - See LICENSE file for details.
