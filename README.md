@@ -66,6 +66,142 @@ flowchart TB
 
 ---
 
+## System Sequence Diagram
+
+The following sequence diagram shows the complete flow from node startup through P2P handshake, block propagation, chain reorganization, and real-time dashboard updates.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User as User/Operator
+    participant Frontend as Frontend Dashboard (Next.js)
+    participant API as Backend REST API (aiohttp :3001)
+    participant WS as WebSocket Server (:3001/ws/live)
+    participant Node as Node Core (Python)
+    participant P2P as P2P Network Layer
+    participant Peer1 as Remote Peer A
+    participant Peer2 as Remote Peer B
+    participant DB as SQLite Database
+
+    Note over User,DB: === NODE STARTUP ===
+    User->>Frontend: Open http://localhost:3000
+    Frontend->>API: GET /api/health
+    API-->>Frontend: {status: "ok", version: "1.0.0"}
+    
+    User->>Node: python -m kerma.main
+    Node->>DB: create_tables() + ensure_genesis()
+    DB-->>Node: Genesis block stored (height=0)
+    Node->>Node: Initialize blockchain tip
+    Node->>P2P: Start TCP server :18018
+    Node->>P2P: Bootstrap to seed peers
+    P2P->>Peer1: TCP connect :18018
+    P2P->>Peer1: hello {version, agent}
+    P2P->>Peer1: getpeers
+    Peer1-->>P2P: peers [list of 30]
+    P2P->>Peer1: getchaintip
+    Peer1-->>P2P: chaintip {blockid}
+    P2P->>Peer1: getmempool
+    Peer1-->>P2P: mempool {txids}
+    P2P-->>Node: Peer connections established
+    
+    Note over User,DB: === DASHBOARD POLLING (every 5s) ===
+    Frontend->>API: GET /api/stats
+    API->>Node: get_stats()
+    Node->>DB: SELECT MAX(height) FROM heights
+    DB-->>Node: tip_id, tip_height
+    Node-->>API: {height, tipId, peerCount, mempoolSize, uptime}
+    API-->>Frontend: JSON response
+    
+    Frontend->>API: GET /api/chain?limit=10
+    API->>Node: blockchain.get_chain(10)
+    Node->>DB: SELECT objects + heights (walk previd)
+    DB-->>Node: Block data
+    Node-->>API: Block array
+    API-->>Frontend: Block list with txCount, miner, etc.
+    
+    Frontend->>API: GET /api/mempool
+    API->>Node: mempool.get_entries()
+    Node-->>API: TX entries (txid, inputs, outputs, value)
+    API-->>Frontend: Mempool table data
+    
+    Frontend->>API: GET /api/peers
+    API->>Node: peers.get_all() + connections
+    Node-->>API: Peer list with connected status
+    API-->>Frontend: Peer grid data
+    
+    Frontend->>WS: Connect WebSocket
+    WS-->>Frontend: WebSocket open
+    
+    Note over User,DB: === BLOCK PROPAGATION (mined locally or received) ===
+    Peer1->>P2P: ihaveobject {blockid}
+    P2P->>DB: SELECT EXISTS(oid)
+    alt Block unknown
+        P2P->>Peer1: getobject {blockid}
+        Peer1-->>P2P: object {block_dict}
+        P2P->>Node: _handle_object_msg(block)
+        Node->>Node: validate_block() → verify_block_tail()
+        Node->>DB: Store block + UTXO + height
+        alt New tip (height > current)
+            Node->>Node: Update tip, reorg mempool
+            Node->>P2P: Broadcast chaintip
+            P2P->>Peer1: chaintip {new_blockid}
+            P2P->>Peer2: chaintip {new_blockid}
+            Node->>WS: broadcast_ws("new_block", block_data)
+            WS-->>Frontend: {type: "new_block", data: {...}}
+            Frontend->>Frontend: Refresh stats + chain
+        end
+    end
+    
+    Note over User,DB: === TRANSACTION PROPAGATION ===
+    Peer1->>P2P: ihaveobject {txid}
+    P2P->>DB: SELECT EXISTS(oid)
+    alt TX unknown
+        P2P->>Peer1: getobject {txid}
+        Peer1-->>P2P: object {tx_dict}
+        P2P->>Node: _handle_object_msg(tx)
+        Node->>Node: verify_tx_signature + UTXO conservation
+        Node->>DB: Store transaction
+        Node->>Node: mempool.try_add_tx()
+        Node->>WS: broadcast_ws("new_tx", tx_data)
+        WS-->>Frontend: {type: "new_tx", data: {...}}
+        Frontend->>Frontend: Update mempool table
+    end
+    
+    Note over User,DB: === CHAIN REORGANIZATION ===
+    Peer1->>P2P: chaintip {blockid=E}  (height 5 > local 3)
+    P2P->>DB: SELECT EXISTS(oid)
+    alt Block E unknown
+        P2P->>Peer1: getobject {E}
+        Peer1-->>P2P: object {E}
+        P2P->>Node: _handle_object_msg(E)
+        Node->>DB: Fetch D, E, verify chain
+        Node->>DB: Get UTXO for E
+        Node->>Node: mempool.rebase_to_block(E)
+        Node->>Node: Disconnect C, return its TXs to pool
+        Node->>Node: Connect D, E, mark TXs confirmed
+        Node->>Node: Re-validate all pending TXs vs UTXO(E)
+        Node->>P2P: Broadcast chaintip E
+        P2P->>Peer2: chaintip {E}
+        Node->>WS: broadcast_ws("reorg", {old_tip: C, new_tip: E})
+        WS-->>Frontend: {type: "reorg", data: {...}}
+        Frontend->>Frontend: Full refresh (stats, chain, mempool)
+    end
+    
+    Note over User,DB: === PEER DISCOVERY & MAINTENANCE ===
+    loop Every 10s (service_loop_delay)
+        Node->>Node: resupply_connections()
+        alt Connections < threshold (10)
+            Node->>PeerMgr: get_available_peers()
+            PeerMgr-->>Node: Peer set
+            Node->>P2P: Connect to random peers
+            P2P->>PeerX: TCP connect + hello + getpeers
+        end
+        Node->>PeerMgr: save()  // persist peers.json
+    end
+```
+
+---
+
 ## Project Structure
 
 ---
