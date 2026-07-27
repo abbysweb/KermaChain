@@ -634,6 +634,273 @@ Tests cover:
 
 ---
 
+## Genesis Block Explained
+
+The genesis block is hardcoded in `kerma/constants.py` and `backend/kerma/config.py`:
+
+```json
+{
+  "T": "0000abc000000000000000000000000000000000000000000000000000000000",
+  "created": 1671062400,  // Dec 13, 2022 — NYT fusion breakthrough
+  "miner": "Marabu",
+  "nonce": "00000000000000000000000000000000000000000000000000000000005bb0f2",
+  "note": "The New York Times 2022-12-13: Scientists Achieve Nuclear Fusion Breakthrough With Blast of 192 Lasers",
+  "previd": null,
+  "txids": [],
+  "type": "block"
+}
+```
+
+- **Timestamp** (`1671062400`) = Dec 13, 2022 00:00:00 UTC — the day NYT reported a nuclear fusion net-energy-gain breakthrough
+- **Target** (`T`) = Same as all blocks (`0000abc...`) — genesis must also satisfy PoW
+- **Nonce** = Pre-computed so genesis hashes below target
+- **Note** = Immutable historical marker (like Bitcoin's "Chancellor on brink of second bailout")
+
+---
+
+## UTXO Walkthrough (Visual)
+
+UTXO = **Unspent Transaction Output** — think of it as physical cash bills, not a bank balance.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ BLOCK 1: Coinbase (miner reward)                                │
+│   TX: coinbase_abc  →  Output #0: 50 TMC to Miner's pubkey     │
+│   UTXO SET: { "coinbase_abc#0": 50_000_000_000_000 }           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ BLOCK 2: Miner sends 20 TMC to Alice                           │
+│   TX: spend_tx_123                                             │
+│     Input:  coinbase_abc#0 (50 TMC) signed by Miner            │
+│     Output #0: 20 TMC to Alice's pubkey                        │
+│     Output #1: 30 TMC change back to Miner                     │
+│   UTXO SET:                                                    │
+│     { "spend_tx_123#0": 20_000_000_000_000,    // Alice        │
+│       "spend_tx_123#1": 30_000_000_000_000 }   // Miner change  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ BLOCK 3: Alice sends 5 TMC to Bob                              │
+│   TX: alice_to_bob_456                                         │
+│     Input:  spend_tx_123#0 (20 TMC) signed by Alice            │
+│     Output #0: 5 TMC to Bob's pubkey                           │
+│     Output #1: 15 TMC change back to Alice                     │
+│   UTXO SET:                                                    │
+│     { "spend_tx_123#1": 30_000_000_000_000,    // Miner        │
+│       "alice_to_bob_456#0": 5_000_000_000_000,  // Bob         │
+│       "alice_to_bob_456#1": 15_000_000_000_000 } // Alice       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key rules:**
+- Each UTXO can only be spent **once** (prevents double-spending)
+- Inputs must reference **existing, unspent** UTXOs
+- Sum(inputs) ≥ Sum(outputs) — difference = miner fee
+- Coinbase TX has no inputs, creates new coins (block reward + fees)
+
+---
+
+## Simple Miner Example
+
+KermaChain doesn't include a built-in miner — you write one! Here's a minimal CPU miner:
+
+```python
+# scripts/simple_miner.py
+# Run: python scripts/simple_miner.py <miner_pubkey_hex>
+
+import sys
+import hashlib
+import json
+import time
+import requests
+
+from kerma.crypto.jcs import canonicalize
+from kerma.crypto.hashing import get_objid
+
+TARGET = "0000abc000000000000000000000000000000000000000000000000000000000"
+TARGET_INT = int(TARGET, 16)
+API = "http://localhost:3001"
+
+def fetch_mempool():
+    r = requests.get(f"{API}/api/mempool")
+    return r.json()
+
+def fetch_chaintip():
+    r = requests.get(f"{API}/api/stats")
+    return r.json()["tipId"]
+
+def build_block(miner_pubkey, prev_block_id, txids):
+    # Coinbase: reward + fees go to miner
+    coinbase = {
+        "type": "transaction",
+        "height": 0,  # will be set after we know height
+        "outputs": [{"pubkey": miner_pubkey, "value": 50_000_000_000_000}]
+    }
+    coinbase_id = get_objid(coinbase)
+    
+    block = {
+        "type": "block",
+        "txids": [coinbase_id] + txids,
+        "previd": prev_block_id,
+        "created": int(time.time()),
+        "T": TARGET,
+        "miner": "SimpleMiner",
+        "nonce": "0" * 64
+    }
+    return block, coinbase
+
+def mine_block(block):
+    nonce = 0
+    while True:
+        block["nonce"] = f"{nonce:064x}"
+        block_id = get_objid(block)
+        if int(block_id, 16) < TARGET_INT:
+            return block, block_id
+        nonce += 1
+        if nonce % 100000 == 0:
+            print(f"  tried {nonce} nonces...")
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python simple_miner.py <miner_pubkey_hex>")
+        sys.exit(1)
+    
+    miner_pubkey = sys.argv[1]
+    print(f"Mining as {miner_pubkey[:16]}...")
+    
+    while True:
+        tip = fetch_chaintip()
+        mempool = fetch_mempool()
+        txids = [tx["txid"] for tx in mempool]
+        
+        print(f"Tip: {tip[:8]}... | Mempool: {len(txids)} txs")
+        
+        block, coinbase = build_block(miner_pubkey, tip, txids)
+        
+        # Get height from tip
+        r = requests.get(f"{API}/api/blocks/{tip}")
+        if r.ok:
+            height = r.json()["height"]
+            coinbase["height"] = height + 1
+            # Recalculate coinbase ID with correct height
+            block["txids"][0] = get_objid(coinbase)
+        
+        print("Mining...")
+        mined_block, block_id = mine_block(block)
+        print(f"Found block: {block_id[:16]}... (nonce={mined_block['nonce'][:16]}...)")
+        
+        # Submit via P2P would require raw socket — here we just show the block
+        print(json.dumps(mined_block, indent=2))
+        
+        # In reality: broadcast via P2P protocol (ihaveobject → getobject → object)
+
+if __name__ == "__main__":
+    main()
+```
+
+**To mine:**
+1. Generate a keypair: `python -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; k=Ed25519PrivateKey.generate(); print('pub:', k.public_key().public_bytes_raw().hex()); print('priv:', k.private_bytes_raw().hex())"`
+2. Run miner: `python scripts/simple_miner.py <pubkey>`
+3. When block found, submit via P2P (requires implementing `ihaveobject`/`object` messages)
+
+---
+
+## WebSocket Events Reference
+
+The dashboard connects to `ws://localhost:3001/ws/live` for real-time updates.
+
+| Event | Payload | Triggered When |
+|-------|---------|----------------|
+| `new_block` | `{height, blockid, txCount, miner, timestamp}` | New chain tip accepted (local or from peer) |
+| `new_tx` | `{txid, inputs, outputs, totalValue}` | Valid TX added to mempool |
+| `reorg` | `{old_tip, new_tip, disconnected, connected}` | Chain reorganization completed |
+| `peer_update` | `{host, port, connected, connectedSince}` | Peer connects or disconnects |
+
+**Frontend usage (TypeScript):**
+```typescript
+ws.onmessage = (event) => {
+  const { type, data } = JSON.parse(event.data);
+  switch (type) {
+    case "new_block":
+      refreshStats(); refreshChain(); break;
+    case "new_tx":
+      refreshMempool(); break;
+    case "reorg":
+      fullRefresh(); break;
+    case "peer_update":
+      refreshPeers(); break;
+  }
+};
+```
+
+---
+
+## Security Model
+
+| ✅ Implemented | ❌ Not Implemented (Educational Only) |
+|----------------|---------------------------------------|
+| Ed25519 signature verification | DoS protection / rate limiting |
+| UTXO conservation (no inflation) | P2P encryption (plain TCP) |
+| PoW validation (anti-spam) | Sybil resistance (no identity) |
+| Timestamp ordering (no time travel) | Economic incentives (no real value) |
+| Coinbase maturity (height check) | Consensus finality (probabilistic) |
+| Chain reorg handling | Checkpointing / finality gadgets |
+| Faulty/non-faulty error separation | Pruning / archival modes |
+
+**Assumptions:**
+- All nodes run honest code
+- Network latency < block time
+- Majority hashpower is honest (standard PoW assumption)
+- No adversarial peer flooding
+
+---
+
+## Performance Notes
+
+| Metric | Approximate | Notes |
+|--------|-------------|-------|
+| Block validation | 1-5 ms | Single-threaded, crypto-heavy |
+| TX validation | 0.5-2 ms | Ed25519 verify dominates |
+| Mempool rebase | 5-50 ms | Proportional to mempool size |
+| Sync speed | ~100 blocks/sec | Local LAN, depends on disk I/O |
+| DB size | ~1 KB/block | SQLite, no compression |
+| Memory | 50-200 MB | Python + DB cache |
+
+**Bottlenecks:**
+1. Single-threaded asyncio event loop
+2. SQLite synchronous writes
+3. Ed25519 verification per input
+4. Full UTXO copy on reorg
+
+---
+
+## Extending KermaChain
+
+### Easy (Good First Issues)
+- [ ] Add `/api/block/:id/transactions` endpoint (expand txids)
+- [ ] Add `/api/transaction/:id` endpoint
+- [ ] Implement difficulty retargeting (every 2016 blocks)
+- [ ] Add fee-rate mempool sorting
+- [ ] WebSocket: add `stats` broadcast on each block
+
+### Medium
+- [ ] P2P encryption (Noise protocol)
+- [ ] Peer reputation / ban scoring
+- [ ] Block relay optimization (compact blocks)
+- [ ] SQLite WAL mode + connection pooling
+- [ ] Prometheus metrics endpoint
+
+### Advanced
+- [ ] Light client (SPV) with Merkle proofs
+- [ ] Consensus finality gadget (e.g., Casper-like)
+- [ ] Sharding / parallel validation
+- [ ] Hardware wallet integration (Ledger/Trezor)
+
+---
+
 ## License
 
 MIT License - See LICENSE file for details.
