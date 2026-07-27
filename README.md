@@ -810,7 +810,9 @@ if __name__ == "__main__":
 
 ## WebSocket Events Reference
 
-The dashboard connects to `ws://localhost:3001/ws/live` for real-time updates.
+The WebSocket endpoint exists at `ws://localhost:3001/ws/live` but **currently no events are broadcast** — the `broadcast_ws()` method is implemented but never called. This is a good first contribution.
+
+**Planned events (when implemented):**
 
 | Event | Payload | Triggered When |
 |-------|---------|----------------|
@@ -835,6 +837,8 @@ ws.onmessage = (event) => {
   }
 };
 ```
+
+> **Note:** The frontend currently polls REST endpoints every 5s. WebSocket support would eliminate this polling.
 
 ---
 
