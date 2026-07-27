@@ -1,0 +1,10 @@
+version: "3.8"
+
+services:
+  kerma-node:
+    build: .
+    ports:
+      - "18018:18018"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
