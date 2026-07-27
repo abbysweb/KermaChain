@@ -170,25 +170,71 @@ docker-compose up -d
 ## Data Flow
 
 ### Block Validation Pipeline
-1. **Receive** `object` message → parse JSON
-2. **Format validation** (`validate_block`) → structure, PoW, timestamp, previd
-3. **Dependency check** → fetch missing parent block + transactions
-4. **UTXO verification** → apply transactions to parent UTXO set
-5. **Coinbase validation** → height match, reward ≤ block_reward + fees
-6. **Store** → objects, UTXO, height tables
-7. **Chain tip update** → if height > current tip, reorg + rebroadcast
-8. **Mempool rebase** → re-validate pending TXs against new UTXO
+
+```mermaid
+flowchart TD
+    A["Receive 'object' message<br/>via P2P protocol"] --> B["Parse JSON<br/>validate_object()"]
+    B --> C{"obj.type == 'block'?"}
+    C -- No --> D["Validate Transaction<br/>validate_transaction()"]
+    C -- Yes --> E["Format Validation<br/>validate_block()"]
+    
+    E --> F{"PoW valid?<br/>id < TARGET"}
+    F -- No --> G["Reject: INVALID_BLOCK_POW"]
+    F -- Yes --> H{"Timestamp > prev.created?"}
+    H -- No --> I["Reject: INVALID_BLOCK_TIMESTAMP"]
+    H -- Yes --> J{"previd exists in DB?"}
+    J -- No --> K["Request missing parent<br/>getobject(parent_id)"]
+    K --> J
+    J -- Yes --> L{"All txids in DB?"}
+    L -- No --> M["Request missing TXs<br/>getobject(tx_id)"]
+    M --> L
+    L -- Yes --> N["UTXO Verification<br/>verify_block_tail()"]
+    
+    N --> O{"Coinbase valid?<br/>height match, reward ≤ max"}
+    O -- No --> P["Reject: INVALID_BLOCK_COINBASE"]
+    O -- Yes --> Q["Store block, UTXO, height"]
+    
+    Q --> R{"New height > tip_height?"}
+    R -- No --> S["Done: block stored"]
+    R -- Yes --> T["Chain Reorg Detected!"]
+    T --> U["Update tip_id, tip_height"]
+    U --> V["Broadcast chaintip to peers"]
+    V --> W["Rebase Mempool<br/>rebase_to_block(new_tip)"]
+    W --> X["Re-validate pending TXs<br/>against new UTXO"]
+    X --> Y["Keep valid, drop conflicts"]
+    Y --> S
+    
+    D --> Z["Verify signatures<br/>Ed25519"]
+    Z --> AA["Check UTXO conservation<br/>inputs ≥ outputs"]
+    AA --> AB{"Valid?"}
+    AB -- No --> AC["Reject: INVALID_TX_*"]
+    AB -- Yes --> AD["Add to mempool<br/>if no conflicts"]
+```
 
 ### Mempool Rebase on Reorg
-```
-Old tip: A ← B ← C (height 3)
-New tip: A ← B ← D ← E (height 4)
 
-1. Find LCA (B)
-2. Disconnect C → return its TXs to candidate pool
-3. Connect D, E → mark their TXs as confirmed
-4. Re-validate all candidates against new UTXO (E)
-5. Keep valid, drop conflicts
+```mermaid
+flowchart LR
+    subgraph OldChain["Old Chain (disconnected)"]
+        C1["Block C<br/>TXs: c1, c2"]
+    end
+    
+    subgraph Common["Common Ancestor"]
+        B["Block B"]
+    end
+    
+    subgraph NewChain["New Chain (connected)"]
+        D1["Block D<br/>TXs: d1"]
+        E1["Block E<br/>TXs: e1, e2"]
+    end
+    
+    C1 -.->|disconnect| Pool["Candidate Pool<br/>c1, c2, old_mempool"]
+    D1 -.->|connect| Confirmed["Confirmed TXs<br/>d1, e1, e2"]
+    E1 -.->|connect| Confirmed
+    
+    Pool --> Revalidate["Re-validate all<br/>against UTXO(E)"]
+    Revalidate --> Valid["Valid TXs<br/>→ mempool"]
+    Revalidate --> Invalid["Invalid/Conflicts<br/>→ dropped"]
 ```
 
 ---
