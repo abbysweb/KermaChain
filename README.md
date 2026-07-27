@@ -1,6 +1,6 @@
 # KermaChain
 
-A Python P2P blockchain node implementing the Marabu protocol, built as a consolidated project from a series of cryptocurrency assignments. Features a modern Next.js + TypeScript dashboard for real-time monitoring.
+KermaChain is a Python-based educational blockchain implementing a peer-to-peer cryptocurrency network with the Marabu protocol. It features a blockchain node, REST API, and Next.js dashboard for real-time monitoring, demonstrating Proof-of-Work, UTXO, digital signatures, block validation, and decentralized networking.
 
 ---
 
