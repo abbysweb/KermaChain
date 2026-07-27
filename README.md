@@ -16,53 +16,57 @@ ORCID: [0009-0006-7473-0024](https://orcid.org/0009-0006-7473-0024)
 
 ## Architecture Overview
 
+```mermaid
+flowchart TB
+    subgraph Frontend["Frontend (Next.js + TypeScript)"]
+        Dashboard["Dashboard Page<br/>- Stat Cards (height, peers, mempool, uptime)<br/>- Height Chart + Recent Blocks<br/>- Mempool Table + Peer Grid<br/>- Educational Explainer"]
+        API["API Client (lib/api.ts)"]
+        WS["WebSocket Hook (lib/ws.ts)"]
+        Types["TypeScript Types (lib/types.ts)"]
+    end
+
+    subgraph Backend["Backend API (aiohttp + Python)"]
+        REST["REST API Server<br/>:3001<br/>- /api/health<br/>- /api/stats<br/>- /api/chain<br/>- /api/blocks/{id}<br/>- /api/mempool<br/>- /api/peers<br/>- /api/objects/{id}"]
+        WSS["WebSocket Server<br/>:3001/ws/live<br/>- new_block<br/>- new_tx<br/>- reorg<br/>- peer_update"]
+        Node["Node Core<br/>- Blockchain (tip, height)<br/>- Mempool (tx pool, UTXO)<br/>- Validator (pending objects)"]
+    end
+
+    subgraph P2P["P2P Network Layer (asyncio)"]
+        Proto["Protocol Handler<br/>- Message validation<br/>- hello, getpeers, getchaintip<br/>- getmempool, getobject, ihaveobject"]
+        PeerMgr["Peer Manager<br/>- Peer discovery<br/>- Connection pooling<br/>- peers.json persistence"]
+        Conns["Active Connections<br/>- TCP readers/writers<br/>- Message queues"]
+    end
+
+    subgraph Storage["Storage (SQLite)"]
+        DB["Database<br/>- objects (oid, obj)<br/>- utxo (blockid, utxoset)<br/>- heights (blockid, height)"]
+    end
+
+    subgraph Core["Core Blockchain Logic"]
+        Block["Block Validation<br/>- PoW (BLAKE2s)<br/>- Timestamp ordering<br/>- Coinbase reward"]
+        TX["Transaction Validation<br/>- Ed25519 signatures<br/>- UTXO conservation<br/>- Double-spend prevention"]
+        UTXO["UTXO Model<br/>- Unspent outputs tracking<br/>- Reorg rebasing"]
+    end
+
+    Dashboard --> API
+    Dashboard --> WS
+    API --> Types
+    WS --> Types
+    API <--> REST
+    WS <--> WSS
+    REST <--> Node
+    WSS <--> Node
+    Node <--> Proto
+    Proto <--> PeerMgr
+    Proto <--> Conns
+    Node <--> DB
+    Block <--> Node
+    TX <--> Node
+    UTXO <--> Node
 ```
-KermaChain/
-├── kerma/                          # Core blockchain node (Python)
-│   ├── main.py                     # Entry point, P2P connection handling
-│   ├── constants.py                # Genesis block, network config, targets
-│   ├── objects.py                  # Block/TX validation, UTXO, Ed25519 sigs
-│   ├── mempool.py                  # Transaction pool with reorg rebasing
-│   ├── validator.py                # Pending object dependency tracking
-│   ├── network/
-│   │   ├── protocol.py             # Message construction/validation
-│   │   ├── peer.py                 # Peer representation
-│   │   ├── peers.py                # Peer persistence (peers.json)
-│   │   └── exceptions.py           # Faulty/Non-faulty node exceptions
-│   └── storage/
-│       ├── db.py                   # SQLite schema + genesis init
-│       └── jcs.py                  # JSON Canonicalization (RFC 8785)
-│
-├── backend/                        # Async REST API + WebSocket server
-│   └── kerma/
-│       ├── main.py                 # API server entry point
-│       ├── config.py               # Dataclass configuration
-│       ├── crypto/                 # Hashing, signing, JCS
-│       ├── core/                   # Blockchain, Block, TX, Mempool, UTXO
-│       ├── network/                # Async node, protocol, peer manager
-│       ├── storage/                # Database abstraction
-│       └── api/                    # aiohttp REST + WebSocket
-│
-├── frontend/                       # Next.js 14 Dashboard (TypeScript)
-│   ├── app/
-│   │   ├── page.tsx                # Main dashboard (real API data)
-│   │   └── layout.tsx              # Root layout
-│   ├── components/
-│   │   ├── stats/StatCard.tsx      # Metric cards
-│   │   ├── blockchain/             # BlockCard, HeightChart
-│   │   ├── mempool/MempoolTable.tsx
-│   │   ├── network/PeerGrid.tsx
-│   │   ├── educational/            # Explainer, StepDiagram
-│   │   └── layout/Header.tsx
-│   ├── lib/
-│   │   ├── api.ts                  # API client
-│   │   ├── types.ts                # TypeScript interfaces
-│   │   └── ws.ts                   # WebSocket hook
-│   └── ...
-│
-├── tests/                          # Integration tests (pytest)
-└── docs/                           # Development history
-```
+
+---
+
+## Project Structure
 
 ---
 
