@@ -409,14 +409,6 @@ Environment variables:
 
 ---
 
-## Development History
-
-See [`docs/`](docs/) for the assignment progression:
-- `001-initial-merge.md` - Initial consolidation
-- `002-oop-refactor.md` - Object-oriented refactor
-
----
-
 ## License
 
 MIT License - See LICENSE file for details.
